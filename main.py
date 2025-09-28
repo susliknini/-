@@ -78,9 +78,9 @@ user_complaints: Dict[int, str] = {}  # user_id -> complaint_id
 def initialize_moderators():
     # Замените на реальные ID модераторов
     moderators_data = [
-        (7246667404, "moderator1"),
-        (1610843750, "moderator2"),
-        (8423284962, "moderator3"),
+        (7246667404, "IovesusIika"),
+        (1610843750, "vkdistopia"),
+        (8423284962, "splicer33"),
     ]
     
     for user_id, username in moderators_data:
