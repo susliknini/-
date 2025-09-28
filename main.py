@@ -90,8 +90,8 @@ def initialize_moderators():
 def get_main_keyboard():
     keyboard = InlineKeyboardBuilder()
     keyboard.add(
-        InlineKeyboardButton(text="Список модераторов", callback_data="moderators_list"),
-        InlineKeyboardButton(text="Подать жалобу", callback_data="file_complaint")
+        InlineKeyboardButton(text="👻 Список модераторов", callback_data="moderators_list"),
+        InlineKeyboardButton(text="🔵 Подать жалобу", callback_data="file_complaint")
     )
     return keyboard.as_markup()
 
@@ -108,16 +108,16 @@ def get_complaint_types_keyboard():
 def get_confirmation_keyboard():
     keyboard = InlineKeyboardBuilder()
     keyboard.add(
-        InlineKeyboardButton(text="Отправить", callback_data="confirm_complaint"),
-        InlineKeyboardButton(text="Отменить", callback_data="cancel_complaint")
+        InlineKeyboardButton(text="👻 Отправить", callback_data="confirm_complaint"),
+        InlineKeyboardButton(text="🔵 Отменить", callback_data="cancel_complaint")
     )
     return keyboard.as_markup()
 
 def get_moderation_keyboard(complaint_id: str):
     keyboard = InlineKeyboardBuilder()
     keyboard.add(
-        InlineKeyboardButton(text="Принять в обработку", callback_data=f"accept_{complaint_id}"),
-        InlineKeyboardButton(text="Отказать", callback_data=f"reject_{complaint_id}")
+        InlineKeyboardButton(text="👻 Принять в обработку", callback_data=f"accept_{complaint_id}"),
+        InlineKeyboardButton(text="🔵 Отказать", callback_data=f"reject_{complaint_id}")
     )
     return keyboard.as_markup()
 
@@ -134,8 +134,8 @@ def get_rating_keyboard(complaint_id: str, moderator_id: int):
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     welcome_text = (
-        "Привет, тут ты можешь подать жалобу на контент нарушающий правила TOS. "
-        "Выбирай кнопку ниже"
+        "👻 Привет, тут ты можешь подать жалобу на контент нарушающий правила TOS. "
+        "🔵 Выбирай кнопку ниже"
     )
     await message.answer(welcome_text, reply_markup=get_main_keyboard())
 
@@ -143,12 +143,12 @@ async def cmd_start(message: Message):
 @router.callback_query(F.data == "moderators_list")
 async def show_moderators(callback: CallbackQuery):
     if not moderators_db:
-        await callback.answer("Список модераторов пуст")
+        await callback.answer("👻 Список модераторов пуст")
         return
     
-    moderators_text = "Список модераторов:\n\n"
+    moderators_text = "👻 Список модераторов:\n\n"
     for moderator in moderators_db.values():
-        moderators_text += f"@{moderator.username} | ID: {moderator.user_id} | Рейтинг: {moderator.rating:.1f}⭐\n"
+        moderators_text += f"🔵 @{moderator.username} | ID: {moderator.user_id} | Рейтинг: {moderator.rating:.1f}⭐\n"
     
     await callback.message.edit_text(moderators_text)
     await callback.answer()
@@ -157,7 +157,7 @@ async def show_moderators(callback: CallbackQuery):
 async def start_complaint(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ComplaintStates.wait_for_link)
     await callback.message.edit_text(
-        "Пожалуйста, отправьте ссылку на нарушение (канал/бот/пользователь):"
+        "👻 Пожалуйста, отправьте ссылку на нарушение (канал/бот/пользователь):"
     )
     await callback.answer()
 
@@ -167,14 +167,14 @@ async def process_link(message: Message, state: FSMContext):
     
     # Простая валидация ссылки
     if not (link.startswith('http') or link.startswith('t.me')):
-        await message.answer("Пожалуйста, веди норм ссылку. Пример: https://t.me/. Ток публчичные чаты плс")
+        await message.answer("👻 Пожалуйста, веди норм ссылку. Пример: https://t.me/. Ток публчичные чаты плс")
         return
     
     await state.update_data(link=link)
     await state.set_state(ComplaintStates.wait_for_type)
     
     await message.answer(
-        "Выберите тип нарушения:",
+        "🔵 Выберите тип нарушения:",
         reply_markup=get_complaint_types_keyboard()
     )
 
@@ -189,10 +189,10 @@ async def process_complaint_type(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     
     confirmation_text = (
-        "Пожалуйста, подтвердите вашу жалобу:\n\n"
-        f"Ссылка: {data['link']}\n"
-        f"Тип нарушения: {complaint_type}\n\n"
-        "Всё верно?"
+        "👻 Пожалуйста, подтвердите вашу жалобу:\n\n"
+        f"🔵 Ссылка: {data['link']}\n"
+        f"🔵 Тип нарушения: {complaint_type}\n\n"
+        "👻 Всё верно?"
     )
     
     await callback.message.edit_text(confirmation_text, reply_markup=get_confirmation_keyboard())
@@ -219,26 +219,26 @@ async def confirm_complaint(callback: CallbackQuery, state: FSMContext):
     await notify_moderators(complaint)
     
     await callback.message.edit_text(
-        "Ваша жалоба отправлена модераторам. Ожидайте рассмотрения."
+        "👻 Ваша жалоба отправлена модераторам. Ожидайте рассмотрения."
     )
     await state.clear()
     await callback.answer()
 
 @router.callback_query(F.data == "cancel_complaint")
 async def cancel_complaint(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Жалоба отменена.")
+    await callback.message.edit_text("👻 Жалоба отменена.")
     await state.clear()
     await callback.answer()
 
 # Уведомление модераторов
 async def notify_moderators(complaint: Complaint):
     complaint_text = (
-        "📢 Новая жалоба!\n\n"
-        f"👤 Пользователь: @{complaint.username}\n"
-        f"🆔 ID: {complaint.user_id}\n"
-        f"🔗 Ссылка: {complaint.link}\n"
-        f"📋 Тип нарушения: {complaint.complaint_type}\n"
-        f"🆔 ID жалобы: {complaint.complaint_id}"
+        "👻 Новая жалоба!\n\n"
+        f"🔵 Пользователь: @{complaint.username}\n"
+        f"🔵 ID: {complaint.user_id}\n"
+        f"🔵 Ссылка: {complaint.link}\n"
+        f"🔵 Тип нарушения: {complaint.complaint_type}\n"
+        f"🔵 ID жалобы: {complaint.complaint_id}"
     )
     
     for moderator in moderators_db.values():
@@ -249,7 +249,7 @@ async def notify_moderators(complaint: Complaint):
                 reply_markup=get_moderation_keyboard(complaint.complaint_id)
             )
         except Exception as e:
-            logger.error(f"Не удалось отправить уведомление модератору {moderator.user_id}: {e}")
+            logger.error(f"👻 Не удалось отправить уведомление модератору {moderator.user_id}: {e}")
 
 # Обработка действий модератора
 @router.callback_query(F.data.startswith("accept_"))
@@ -257,19 +257,19 @@ async def accept_complaint(callback: CallbackQuery):
     complaint_id = callback.data.split("_")[1]
     
     if complaint_id not in complaints_db:
-        await callback.answer("Жалоба не найдена")
+        await callback.answer("👻 Жалоба не найдена")
         return
     
     complaint = complaints_db[complaint_id]
     
     # Проверяем, что модератор есть в списке
     if callback.from_user.id not in moderators_db:
-        await callback.answer("У вас нет прав модератора")
+        await callback.answer("👻 У вас нет прав модератора")
         return
     
     # Проверяем, не взята ли уже жалоба другим модератором
     if complaint.status != "pending":
-        await callback.answer("Эта жалоба уже обрабатывается другим модератором")
+        await callback.answer("👻 Эта жалоба уже обрабатывается другим модератором")
         return
     
     # Обновляем статус жалобы
@@ -281,17 +281,17 @@ async def accept_complaint(callback: CallbackQuery):
     try:
         await bot.send_message(
             complaint.user_id,
-            f"Вашу жалобу принял модератор @{moderator.username}. Оставьте рейтинг:",
+            f"👻 Вашу жалобу принял модератор @{moderator.username}. Оставьте рейтинг:",
             reply_markup=get_rating_keyboard(complaint_id, moderator.user_id)
         )
     except Exception as e:
-        logger.error(f"Не удалось уведомить пользователя {complaint.user_id}: {e}")
+        logger.error(f"👻 Не удалось уведомить пользователя {complaint.user_id}: {e}")
     
     # Обновляем сообщение у модератора
     await callback.message.edit_text(
-        f"✅ Вы приняли жалобу {complaint_id} в обработку\n\n"
-        f"Ссылка: {complaint.link}\n"
-        f"Тип: {complaint.complaint_type}"
+        f"👻 Вы приняли жалобу {complaint_id} в обработку\n\n"
+        f"🔵 Ссылка: {complaint.link}\n"
+        f"🔵 Тип: {complaint.complaint_type}"
     )
     
     await callback.answer()
@@ -301,14 +301,14 @@ async def reject_complaint(callback: CallbackQuery, state: FSMContext):
     complaint_id = callback.data.split("_")[1]
     
     if complaint_id not in complaints_db:
-        await callback.answer("Жалоба не найдена")
+        await callback.answer("👻 Жалоба не найдена")
         return
     
     complaint = complaints_db[complaint_id]
     
     # Проверяем права модератора
     if callback.from_user.id not in moderators_db:
-        await callback.answer("У вас нет прав модератора")
+        await callback.answer("👻 У вас нет прав модератора")
         return
     
     # Помечаем жалобу как отклоненную
@@ -319,13 +319,13 @@ async def reject_complaint(callback: CallbackQuery, state: FSMContext):
     try:
         await bot.send_message(
             complaint.user_id,
-            f"Ваша жалоба была отклонена модератором. "
-            f"Если у вас есть вопросы, обратитесь к администрации."
+            f"👻 Ваша жалоба была отклонена модератором. "
+            f"🔵 Если у вас есть вопросы, обратитесь к администрации."
         )
     except Exception as e:
-        logger.error(f"Не удалось уведомить пользователя {complaint.user_id}: {e}")
+        logger.error(f"👻 Не удалось уведомить пользователя {complaint.user_id}: {e}")
     
-    await callback.message.edit_text(f"❌ Вы отклонили жалобу {complaint_id}")
+    await callback.message.edit_text(f"👻 Вы отклонили жалобу {complaint_id}")
     await callback.answer()
 
 # Обработка оценки модератора
@@ -337,14 +337,14 @@ async def rate_moderator(callback: CallbackQuery):
     rating = int(parts[3])
     
     if complaint_id not in complaints_db:
-        await callback.answer("Жалоба не найдена")
+        await callback.answer("👻 Жалоба не найдена")
         return
     
     complaint = complaints_db[complaint_id]
     
     # Проверяем, что оценку ставит автор жалобы
     if callback.from_user.id != complaint.user_id:
-        await callback.answer("Вы не можете оценить эту жалобу")
+        await callback.answer("👻 Вы не можете оценить эту жалобу")
         return
     
     # Обновляем рейтинг модератора
@@ -358,10 +358,10 @@ async def rate_moderator(callback: CallbackQuery):
         complaint.status = "approved"
         
         await callback.message.edit_text(
-            f"Спасибо за вашу оценку! Модератор @{moderator.username} теперь имеет рейтинг {moderator.rating:.1f}⭐"
+            f"👻 Спасибо за вашу оценку! Модератор @{moderator.username} теперь имеет рейтинг {moderator.rating:.1f}⭐"
         )
     else:
-        await callback.answer("Модератор не найден")
+        await callback.answer("👻 Модератор не найден")
         return
     
     await callback.answer()
@@ -369,7 +369,7 @@ async def rate_moderator(callback: CallbackQuery):
 # Запуск бота
 async def main():
     initialize_moderators()
-    logger.info("Бот запущен")
+    logger.info("👻 Бот запущен")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
