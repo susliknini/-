@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional
 from uuid import uuid4
-
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -15,12 +15,13 @@ from aiogram.types import (
     Message,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+import os
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Токен бота (замените на свой)
+# Токен бота
 BOT_TOKEN = "8244351005:AAF9y3P7CK9lT2hIXFDlGaDg8BY1Dh2FBXs"
 
 # Инициализация бота и диспетчера
@@ -76,7 +77,6 @@ user_complaints: Dict[int, str] = {}  # user_id -> complaint_id
 
 # Инициализация тестовых модераторов
 def initialize_moderators():
-    # Замените на реальные ID модераторов
     moderators_data = [
         (7246667404, "IovesusIika"),
         (1610843750, "vkdistopia"),
@@ -102,7 +102,7 @@ def get_complaint_types_keyboard():
             text=complaint_type, 
             callback_data=f"complaint_type_{i}"
         ))
-    keyboard.adjust(1)  # По одной кнопке в строке
+    keyboard.adjust(1)
     return keyboard.as_markup()
 
 def get_confirmation_keyboard():
@@ -129,6 +129,31 @@ def get_rating_keyboard(complaint_id: str, moderator_id: int):
             callback_data=f"rate_{complaint_id}_{moderator_id}_{rating}"
         ))
     return keyboard.as_markup()
+
+# Простой HTTP сервер для проверки здоровья
+async def health_check(request):
+    return web.json_response({
+        "status": "ok", 
+        "service": "Telegram Complaint Bot",
+        "timestamp": datetime.now().isoformat(),
+        "complaints_count": len(complaints_db),
+        "moderators_count": len(moderators_db)
+    })
+
+async def start_http_server(port=8000):
+    """Запуск HTTP сервера для проверки порта"""
+    app = web.Application()
+    app.router.add_get('/health', health_check)
+    app.router.add_get('/', health_check)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    
+    logger.info(f"👻 HTTP сервер запущен на порту {port}")
+    return runner
 
 # Обработчики команд
 @router.message(CommandStart())
@@ -368,9 +393,21 @@ async def rate_moderator(callback: CallbackQuery):
 
 # Запуск бота
 async def main():
+    # Инициализация модераторов
     initialize_moderators()
-    logger.info("👻 Бот запущен")
-    await dp.start_polling(bot)
+    
+    # Запуск HTTP сервера
+    http_runner = await start_http_server()
+    
+    try:
+        logger.info("👻 Бот запущен")
+        await dp.start_polling(bot)
+    except Exception as e:
+        logger.error(f"👻 Ошибка при запуске бота: {e}")
+    finally:
+        # Корректное завершение
+        await http_runner.cleanup()
+        await bot.session.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
