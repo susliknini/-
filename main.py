@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Токен бота
-BOT_TOKEN = "8277768196:AAGaci4gLGp9XQ_GQc3PfiqOpLtpt4mxN08"
+BOT_TOKEN = "7899945987:AAGCdSpLHHN190hjrJaxOrdekXav-_cmnJg"
 
 # Инициализация бота и диспетчера
 bot = Bot(token=BOT_TOKEN)
