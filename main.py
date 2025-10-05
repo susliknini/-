@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 # Токен бота
 BOT_TOKEN = "7899945987:AAGCdSpLHHN190hjrJaxOrdekXav-_cmnJg"
 
-# Инициализация бота и диспетчера
+# Инициализация б и диспетчера
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
@@ -46,19 +46,43 @@ class SussyAssistant:
                 Не упоминай ChatGPT или другие AI системы - ты уникальный продукт Суслик-Стар."""}
             ] + user_dialogs[user_id]
             
-            # Генерируем ответ через g4f
-            response = await asyncio.to_thread(
-                g4f.ChatCompletion.create,
-                model=g4f.models.gpt_4,
-                messages=messages,
-                provider=g4f.Provider.Bing
-            )
+            # Пробуем разные работающие провайдеры
+            providers = [
+                g4f.Provider.FreeGpt,
+                g4f.Provider.GptGo,
+                g4f.Provider.You,
+                g4f.Provider.Liaobots,
+                g4f.Provider.ChatBase
+            ]
+            
+            response = None
+            last_error = None
+            
+            for provider in providers:
+                try:
+                    logger.info(f"Пробуем провайдер: {provider.__name__}")
+                    response = await asyncio.to_thread(
+                        g4f.ChatCompletion.create,
+                        model=g4f.models.gpt_4,
+                        messages=messages,
+                        provider=provider,
+                        timeout=60
+                    )
+                    if response:
+                        break
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"Провайдер {provider.__name__} не сработал: {e}")
+                    continue
+            
+            if not response:
+                raise Exception(f"Все провайдеры не сработали. Последняя ошибка: {last_error}")
             
             # Добавляем ответ в историю
             user_dialogs[user_id].append({"role": "assistant", "content": response})
             
             # Добавляем подпись если её нет
-            if not response.endswith("с любовью, суслик)"):
+            if not response.strip().endswith("с любовью, суслик)"):
                 response += "\n\nс любовью, суслик)"
                 
             return response
