@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # Токен бота и OpenRouter API ключ
 BOT_TOKEN = "7899945987:AAGCdSpLHHN190hjrJaxOrdekXav-_cmnJg"
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = "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"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Инициализация бота и диспетчера
